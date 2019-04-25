@@ -97,6 +97,7 @@ const (
 	MsgReadIndexResp  MessageType = 16
 	MsgPreVote        MessageType = 17
 	MsgPreVoteResp    MessageType = 18
+	MsgForceProp      MessageType = 19
 )
 
 var MessageType_name = map[int32]string{
@@ -119,6 +120,7 @@ var MessageType_name = map[int32]string{
 	16: "MsgReadIndexResp",
 	17: "MsgPreVote",
 	18: "MsgPreVoteResp",
+	19: "MsgForceProp",
 }
 var MessageType_value = map[string]int32{
 	"MsgHup":            0,
@@ -140,6 +142,7 @@ var MessageType_value = map[string]int32{
 	"MsgReadIndexResp":  16,
 	"MsgPreVote":        17,
 	"MsgPreVoteResp":    18,
+	"MsgForceProp":      19,
 }
 
 func (x MessageType) Enum() *MessageType {
@@ -286,7 +289,7 @@ type ConfChange struct {
 	Type             ConfChangeType `protobuf:"varint,2,opt,name=Type,enum=raftpb.ConfChangeType" json:"Type"`
 	NodeID           uint64         `protobuf:"varint,3,opt,name=NodeID" json:"NodeID"`
 	Weight           uint32         `protobuf:"varint,4,opt,name=Weight" json:"w"`
-	Context          []byte         `protobuf:"bytes,4,opt,name=Context" json:"Context,omitempty"`
+	Context          []byte         `protobuf:"bytes,5,opt,name=Context" json:"Context,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
 
