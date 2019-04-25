@@ -1106,6 +1106,9 @@ func stepLeader(r *raft, m pb.Message) error {
 				var cc pb.ConfChange
 				cc.Unmarshal(e.Data)
 				_, ok := r.prs[cc.NodeID]
+
+				r.logger.Infof("MsgProp (ConfChange): to check valid: pendingIndex: %d applied: %d weight: %v ok: %v", r.pendingConfIndex, r.raftLog.applied, cc.Weight, ok)
+
 				if r.pendingConfIndex > r.raftLog.applied {
 					r.logger.Infof("propose conf %s ignored since pending unapplied configuration [index %d, applied %d]",
 						e.String(), r.pendingConfIndex, r.raftLog.applied)

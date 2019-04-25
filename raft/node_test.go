@@ -323,7 +323,7 @@ func TestNodeProposeConfig(t *testing.T) {
 		}
 		n.Advance()
 	}
-	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1}
+	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Weight: 1}
 	ccdata, err := cc.Marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +396,7 @@ func TestNodeProposeAddDuplicateNode(t *testing.T) {
 		}
 	}()
 
-	cc1 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1}
+	cc1 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Weight: 1}
 	ccdata1, _ := cc1.Marshal()
 	n.ProposeConfChange(context.TODO(), cc1)
 	fmt.Println("after ProposeConfChange cc1")
@@ -408,7 +408,7 @@ func TestNodeProposeAddDuplicateNode(t *testing.T) {
 	<-applyConfChan
 
 	// the new node join should be ok
-	cc2 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 2}
+	cc2 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 2, Weight: 1}
 	ccdata2, _ := cc2.Marshal()
 	n.ProposeConfChange(context.TODO(), cc2)
 	fmt.Println("after ProposeConfChange cc2")
@@ -590,7 +590,7 @@ func TestNodeStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1}
+	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Weight: 1}
 	ccdata, err := cc.Marshal()
 	if err != nil {
 		t.Fatalf("unexpected marshal error: %v", err)
@@ -622,7 +622,7 @@ func TestNodeStart(t *testing.T) {
 		MaxSizePerMsg:   noLimit,
 		MaxInflightMsgs: 256,
 	}
-	n := StartNode(c, []Peer{{ID: 1}})
+	n := StartNode(c, []Peer{{ID: 1, Weight: 1}})
 	defer n.Stop()
 	g := <-n.Ready()
 	if !reflect.DeepEqual(g, wants[0]) {
@@ -751,7 +751,7 @@ func TestNodeAdvance(t *testing.T) {
 		MaxSizePerMsg:   noLimit,
 		MaxInflightMsgs: 256,
 	}
-	n := StartNode(c, []Peer{{ID: 1}})
+	n := StartNode(c, []Peer{{ID: 1, Weight: 1}})
 	defer n.Stop()
 	rd := <-n.Ready()
 	storage.Append(rd.Entries)
@@ -854,7 +854,7 @@ func TestNodeProposeAddLearnerNode(t *testing.T) {
 			}
 		}
 	}()
-	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddLearnerNode, NodeID: 2}
+	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddLearnerNode, NodeID: 2, Weight: 1}
 	n.ProposeConfChange(context.TODO(), cc)
 	<-applyConfChan
 	close(stop)
