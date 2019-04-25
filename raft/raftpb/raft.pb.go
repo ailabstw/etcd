@@ -272,6 +272,7 @@ func (*HardState) Descriptor() ([]byte, []int) { return fileDescriptorRaft, []in
 type ConfState struct {
 	Nodes            []uint64 `protobuf:"varint,1,rep,name=nodes" json:"nodes,omitempty"`
 	Learners         []uint64 `protobuf:"varint,2,rep,name=learners" json:"learners,omitempty"`
+	Weights          []uint32 `protobuf:"varint,3,rep,name=weights" json:"weights,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -284,6 +285,7 @@ type ConfChange struct {
 	ID               uint64         `protobuf:"varint,1,opt,name=ID" json:"ID"`
 	Type             ConfChangeType `protobuf:"varint,2,opt,name=Type,enum=raftpb.ConfChangeType" json:"Type"`
 	NodeID           uint64         `protobuf:"varint,3,opt,name=NodeID" json:"NodeID"`
+	Weight           uint32         `protobuf:"varint,4,opt,name=Weight" json:"w"`
 	Context          []byte         `protobuf:"bytes,4,opt,name=Context" json:"Context,omitempty"`
 	XXX_unrecognized []byte         `json:"-"`
 }
@@ -549,6 +551,13 @@ func (m *ConfState) MarshalTo(dAtA []byte) (int, error) {
 			i = encodeVarintRaft(dAtA, i, uint64(num))
 		}
 	}
+	if len(m.Weights) > 0 {
+		for _, num := range m.Weights {
+			dAtA[i] = 0x18
+			i++
+			i = encodeVarintRaft(dAtA, i, uint64(num))
+		}
+	}
 	if m.XXX_unrecognized != nil {
 		i += copy(dAtA[i:], m.XXX_unrecognized)
 	}
@@ -579,8 +588,11 @@ func (m *ConfChange) MarshalTo(dAtA []byte) (int, error) {
 	dAtA[i] = 0x18
 	i++
 	i = encodeVarintRaft(dAtA, i, uint64(m.NodeID))
+	dAtA[i] = 0x20
+	i++
+	i = encodeVarintRaft(dAtA, i, uint64(m.Weight))
 	if m.Context != nil {
-		dAtA[i] = 0x22
+		dAtA[i] = 0x2a
 		i++
 		i = encodeVarintRaft(dAtA, i, uint64(len(m.Context)))
 		i += copy(dAtA[i:], m.Context)
@@ -699,6 +711,11 @@ func (m *ConfState) Size() (n int) {
 			n += 1 + sovRaft(uint64(e))
 		}
 	}
+	if len(m.Weights) > 0 {
+		for _, e := range m.Weights {
+			n += 1 + sovRaft(uint64(e))
+		}
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -711,6 +728,7 @@ func (m *ConfChange) Size() (n int) {
 	n += 1 + sovRaft(uint64(m.ID))
 	n += 1 + sovRaft(uint64(m.Type))
 	n += 1 + sovRaft(uint64(m.NodeID))
+	n += 1 + sovRaft(uint64(m.Weight))
 	if m.Context != nil {
 		l = len(m.Context)
 		n += 1 + l + sovRaft(uint64(l))
@@ -1680,6 +1698,68 @@ func (m *ConfState) Unmarshal(dAtA []byte) error {
 			} else {
 				return fmt.Errorf("proto: wrong wireType = %d for field Learners", wireType)
 			}
+		case 3:
+			if wireType == 0 {
+				var v uint32
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowRaft
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					v |= (uint32(b) & 0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				m.Weights = append(m.Weights, v)
+			} else if wireType == 2 {
+				var packedLen int
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowRaft
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					packedLen |= (int(b) & 0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				if packedLen < 0 {
+					return ErrInvalidLengthRaft
+				}
+				postIndex := iNdEx + packedLen
+				if postIndex > l {
+					return io.ErrUnexpectedEOF
+				}
+				for iNdEx < postIndex {
+					var v uint32
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowRaft
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						v |= (uint32(b) & 0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					m.Weights = append(m.Weights, v)
+				}
+			} else {
+				return fmt.Errorf("proto: wrong wireType = %d for field Weights", wireType)
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipRaft(dAtA[iNdEx:])
@@ -1789,6 +1869,25 @@ func (m *ConfChange) Unmarshal(dAtA []byte) error {
 				}
 			}
 		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Weight", wireType)
+			}
+			m.Weight = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRaft
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Weight |= (uint32(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 5:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Context", wireType)
 			}
