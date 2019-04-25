@@ -567,8 +567,8 @@ func TestLearnerPromotion(t *testing.T) {
 
 	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgBeat})
 
-	n1.addNode(2)
-	n2.addNode(2)
+	n1.addNode(2, 1)
+	n2.addNode(2, 1)
 	if n2.isLearner {
 		t.Error("peer 2 is learner, want not")
 	}
@@ -889,7 +889,7 @@ func TestLearnerLogReplication(t *testing.T) {
 		t.Errorf("peer 2 wants committed to %d, but still %d", n1.raftLog.committed, n2.raftLog.committed)
 	}
 
-	match := n1.getProgress(2).Match
+	match := n1.getProgress(2, false).Match
 	if match != n2.raftLog.committed {
 		t.Errorf("progress 2 of leader 1 wants match %d, but got %d", n2.raftLog.committed, match)
 	}
@@ -1352,7 +1352,7 @@ func TestCommit(t *testing.T) {
 
 		sm := newTestRaft(1, []uint64{1}, 10, 2, storage)
 		for j := 0; j < len(tt.matches); j++ {
-			sm.setProgress(uint64(j)+1, tt.matches[j], tt.matches[j]+1, false)
+			sm.setProgress(uint64(j)+1, tt.matches[j], tt.matches[j]+1, false, 1, false, false)
 		}
 		sm.maybeCommit()
 		if g := sm.raftLog.committed; g != tt.w {
@@ -1599,7 +1599,7 @@ func TestMsgAppRespWaitReset(t *testing.T) {
 
 	// The new leader has just emitted a new Term 4 entry; consume those messages
 	// from the outgoing queue.
-	sm.bcastAppend()
+	sm.bcastAppend(false)
 	sm.readMessages()
 
 	// Node 2 acks the first entry, making it committed.
@@ -2137,7 +2137,7 @@ func TestNonPromotableVoterWithCheckQuorum(t *testing.T) {
 	nt := newNetwork(a, b)
 	setRandomizedElectionTimeout(b, b.electionTimeout+1)
 	// Need to remove 2 again to make it a non-promotable node since newNetwork overwritten some internal states
-	b.delProgress(2)
+	b.delProgress(2, false)
 
 	if b.promotable() {
 		t.Fatalf("promotable = %v, want false", b.promotable())
@@ -2931,7 +2931,7 @@ func TestRestore(t *testing.T) {
 	if mustTerm(sm.raftLog.term(s.Metadata.Index)) != s.Metadata.Term {
 		t.Errorf("log.lastTerm = %d, want %d", mustTerm(sm.raftLog.term(s.Metadata.Index)), s.Metadata.Term)
 	}
-	sg := sm.nodes()
+	sg, _ := sm.nodes(false)
 	if !reflect.DeepEqual(sg, s.Metadata.ConfState.Nodes) {
 		t.Errorf("sm.Nodes = %+v, want %+v", sg, s.Metadata.ConfState.Nodes)
 	}
@@ -2963,7 +2963,7 @@ func TestRestoreWithLearner(t *testing.T) {
 	if mustTerm(sm.raftLog.term(s.Metadata.Index)) != s.Metadata.Term {
 		t.Errorf("log.lastTerm = %d, want %d", mustTerm(sm.raftLog.term(s.Metadata.Index)), s.Metadata.Term)
 	}
-	sg := sm.nodes()
+	sg, _ := sm.nodes(false)
 	if len(sg) != len(s.Metadata.ConfState.Nodes) {
 		t.Errorf("sm.Nodes = %+v, length not equal with %+v", sg, s.Metadata.ConfState.Nodes)
 	}
@@ -3192,7 +3192,8 @@ func TestSlowNodeRestore(t *testing.T) {
 	}
 	lead := nt.peers[1].(*raft)
 	nextEnts(lead, nt.storage[1])
-	nt.storage[1].CreateSnapshot(lead.raftLog.applied, &pb.ConfState{Nodes: lead.nodes()}, nil)
+	nodes, weights := lead.nodes(false)
+	nt.storage[1].CreateSnapshot(lead.raftLog.applied, &pb.ConfState{Nodes: nodes, Weights: weights}, nil)
 	nt.storage[1].Compact(lead.raftLog.applied)
 
 	nt.recover()
@@ -3286,8 +3287,8 @@ func TestNewLeaderPendingConfig(t *testing.T) {
 // TestAddNode tests that addNode could update nodes correctly.
 func TestAddNode(t *testing.T) {
 	r := newTestRaft(1, []uint64{1}, 10, 1, NewMemoryStorage())
-	r.addNode(2)
-	nodes := r.nodes()
+	r.addNode(2, 1)
+	nodes, _ := r.nodes(false)
 	wnodes := []uint64{1, 2}
 	if !reflect.DeepEqual(nodes, wnodes) {
 		t.Errorf("nodes = %v, want %v", nodes, wnodes)
@@ -3321,7 +3322,7 @@ func TestAddNodeCheckQuorum(t *testing.T) {
 		r.tick()
 	}
 
-	r.addNode(2)
+	r.addNode(2, 1)
 
 	// This tick will reach electionTimeout, which triggers a quorum check.
 	r.tick()
@@ -3348,15 +3349,25 @@ func TestRemoveNode(t *testing.T) {
 	r := newTestRaft(1, []uint64{1, 2}, 10, 1, NewMemoryStorage())
 	r.removeNode(2)
 	w := []uint64{1}
-	if g := r.nodes(); !reflect.DeepEqual(g, w) {
+	g, weights := r.nodes(false)
+	if !reflect.DeepEqual(g, w) {
 		t.Errorf("nodes = %v, want %v", g, w)
+	}
+
+	if len(g) != len(weights) {
+		t.Errorf("weights = %v nodes = %v", weights, g)
 	}
 
 	// remove all nodes from cluster
 	r.removeNode(1)
 	w = []uint64{}
-	if g := r.nodes(); !reflect.DeepEqual(g, w) {
+	g, weights = r.nodes(false)
+	if !reflect.DeepEqual(g, w) {
 		t.Errorf("nodes = %v, want %v", g, w)
+	}
+
+	if len(g) != len(weights) {
+		t.Errorf("weights = %v nodes = %v", weights, g)
 	}
 }
 
@@ -3366,8 +3377,12 @@ func TestRemoveLearner(t *testing.T) {
 	r := newTestLearnerRaft(1, []uint64{1}, []uint64{2}, 10, 1, NewMemoryStorage())
 	r.removeNode(2)
 	w := []uint64{1}
-	if g := r.nodes(); !reflect.DeepEqual(g, w) {
+	g, weights := r.nodes(false)
+	if !reflect.DeepEqual(g, w) {
 		t.Errorf("nodes = %v, want %v", g, w)
+	}
+	if len(g) != len(weights) {
+		t.Errorf("weights = %v nodes = %v", weights, g)
 	}
 
 	w = []uint64{}
@@ -3377,8 +3392,12 @@ func TestRemoveLearner(t *testing.T) {
 
 	// remove all nodes from cluster
 	r.removeNode(1)
-	if g := r.nodes(); !reflect.DeepEqual(g, w) {
+	g, weights = r.nodes(false)
+	if !reflect.DeepEqual(g, w) {
 		t.Errorf("nodes = %v, want %v", g, w)
+	}
+	if len(g) != len(weights) {
+		t.Errorf("weights = %v nodes = %v", weights, g)
 	}
 }
 func TestPromotable(t *testing.T) {
@@ -3416,8 +3435,9 @@ func TestRaftNodes(t *testing.T) {
 	}
 	for i, tt := range tests {
 		r := newTestRaft(1, tt.ids, 10, 1, NewMemoryStorage())
-		if !reflect.DeepEqual(r.nodes(), tt.wids) {
-			t.Errorf("#%d: nodes = %+v, want %+v", i, r.nodes(), tt.wids)
+		n, _ := r.nodes(false)
+		if !reflect.DeepEqual(n, tt.wids) {
+			t.Errorf("#%d: nodes = %+v, want %+v", i, n, tt.wids)
 		}
 	}
 }
@@ -3637,7 +3657,8 @@ func TestLeaderTransferAfterSnapshot(t *testing.T) {
 	nt.send(pb.Message{From: 1, To: 1, Type: pb.MsgProp, Entries: []pb.Entry{{}}})
 	lead := nt.peers[1].(*raft)
 	nextEnts(lead, nt.storage[1])
-	nt.storage[1].CreateSnapshot(lead.raftLog.applied, &pb.ConfState{Nodes: lead.nodes()}, nil)
+	nodes, weights := lead.nodes(false)
+	nt.storage[1].CreateSnapshot(lead.raftLog.applied, &pb.ConfState{Nodes: nodes, Weights: weights}, nil)
 	nt.storage[1].Compact(lead.raftLog.applied)
 
 	nt.recover()
@@ -4418,9 +4439,13 @@ func setRandomizedElectionTimeout(r *raft, v int) {
 }
 
 func newTestConfig(id uint64, peers []uint64, election, heartbeat int, storage Storage) *Config {
+	peerMap := make(map[uint64]uint32)
+	for _, peer := range peers {
+		peerMap[peer] = 1
+	}
 	return &Config{
 		ID:              id,
-		peers:           peers,
+		peers:           peerMap,
 		ElectionTick:    election,
 		HeartbeatTick:   heartbeat,
 		Storage:         storage,

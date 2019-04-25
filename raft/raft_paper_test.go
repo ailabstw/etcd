@@ -906,7 +906,7 @@ func commitNoopEntry(r *raft, s *MemoryStorage) {
 	if r.state != StateLeader {
 		panic("it should only be used when it is the leader")
 	}
-	r.bcastAppend()
+	r.bcastAppend(false)
 	// simulate the response of MsgApp
 	msgs := r.readMessages()
 	for _, m := range msgs {

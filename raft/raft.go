@@ -487,7 +487,8 @@ func (r *raft) getProgress(id uint64, isLocked bool) *Progress {
 		r.lockPrs.RLock()
 		defer r.lockPrs.RUnlock()
 	}
-	if pr, ok := r.prs[id]; ok {
+	pr, ok := r.prs[id]
+	if ok {
 		return pr
 	}
 
