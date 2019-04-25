@@ -1080,8 +1080,15 @@ func stepLeader(r *raft, m pb.Message) error {
 			r.logger.Panicf("%x stepped empty MsgProp", r.id)
 		}
 
+		r.logger.Infof("stepLeader (MsgProp): to RLock: %x [term %d]", r.id, r.Term)
+
 		r.lockPrs.RLock()
-		defer r.lockPrs.RUnlock()
+		defer func() {
+			r.lockPrs.RUnlock()
+			r.logger.Infof("stepLeader (MsgProp): after RUnlock: %x [term %d]", r.id, r.Term)
+		}()
+
+		r.logger.Infof("stepLeader (MsgProp): in RLock: %x [term %d]", r.id, r.Term)
 
 		if _, ok := r.prs[r.id]; !ok {
 			// If we are not currently a member of the range (i.e. this node
@@ -1113,10 +1120,18 @@ func stepLeader(r *raft, m pb.Message) error {
 			}
 		}
 
+		r.logger.Infof("stepLeader (MsgProp): after for-loop: %x [term %d]", r.id, r.Term)
+
 		if !r.appendEntry(m.Entries...) {
 			return ErrProposalDropped
 		}
+
+		r.logger.Infof("stepLeader (MsgProp): to bcastAppend: %x [term %d]", r.id, r.Term)
+
 		r.bcastAppend(true)
+
+		r.logger.Infof("stepLeader (MsgProp): after bcastAppend: %x [term %d]", r.id, r.Term)
+
 		return nil
 	case pb.MsgReadIndex:
 		if r.quorum() > 1 {
