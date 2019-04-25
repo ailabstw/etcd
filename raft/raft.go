@@ -118,7 +118,7 @@ type Config struct {
 	// should only be set when starting a new raft cluster. Restarting raft from
 	// previous configuration will panic if peers is set. peer is private and only
 	// used for testing right now.
-	peers []uint64
+	peers map[uint64]uint32
 
 	// learners contains the IDs of all learner nodes (including self if the
 	// local node is a learner) in the raft cluster. learners only receives
@@ -262,9 +262,14 @@ type raft struct {
 	maxMsgSize         uint64
 	maxUncommittedSize uint64
 	maxInflight        int
-	prs                map[uint64]*Progress
-	learnerPrs         map[uint64]*Progress
-	matchBuf           uint64Slice
+
+	lockPrs     sync.RWMutex
+	prs         map[uint64]*Progress
+	totalWeight int
+
+	learnerPrs map[uint64]*Progress
+	matchBuf   []*Progress
+	//matchBuf   uint64Slice
 
 	state StateType
 
@@ -339,7 +344,15 @@ func newRaft(c *Config) *raft {
 			// updated to specify their nodes through a snapshot.
 			panic("cannot specify both newRaft(peers, learners) and ConfState.(Nodes, Learners)")
 		}
-		peers = cs.Nodes
+		peers = make(map[uint64]uint32)
+		for i, peer := range cs.Nodes {
+			// defensive programming for cs.Weights, default weighting as all 1.
+			weight := uint32(1)
+			if cs.Weights != nil {
+				weight = cs.Weights[i]
+			}
+			peers[peer] = weight
+		}
 		learners = cs.Learners
 	}
 	r := &raft{
@@ -360,8 +373,9 @@ func newRaft(c *Config) *raft {
 		readOnly:                  newReadOnly(c.ReadOnlyOption),
 		disableProposalForwarding: c.DisableProposalForwarding,
 	}
-	for _, p := range peers {
-		r.prs[p] = &Progress{Next: 1, ins: newInflights(r.maxInflight)}
+	for p, weight := range peers {
+		r.prs[p] = &Progress{Next: 1, ins: newInflights(r.maxInflight), Weight: weight}
+		r.totalWeight += int(weight)
 	}
 	for _, p := range learners {
 		if _, ok := r.prs[p]; ok {
@@ -382,8 +396,9 @@ func newRaft(c *Config) *raft {
 	r.becomeFollower(r.Term, None)
 
 	var nodesStrs []string
-	for _, n := range r.nodes() {
-		nodesStrs = append(nodesStrs, fmt.Sprintf("%x", n))
+	nodes, weights := r.nodes(false)
+	for i, n := range nodes {
+		nodesStrs = append(nodesStrs, fmt.Sprintf("(%x:%d)", n, weights[i]))
 	}
 
 	r.logger.Infof("newRaft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d]",
@@ -403,15 +418,25 @@ func (r *raft) hardState() pb.HardState {
 	}
 }
 
-func (r *raft) quorum() int { return len(r.prs)/2 + 1 }
+func (r *raft) quorum() int { return r.totalWeight/2 + 1 }
 
-func (r *raft) nodes() []uint64 {
+func (r *raft) nodes(isLocked bool) ([]uint64, []uint32) {
+	if !isLocked {
+		r.lockPrs.RLock()
+		defer r.lockPrs.RUnlock()
+	}
 	nodes := make([]uint64, 0, len(r.prs))
-	for id := range r.prs {
+	for id, _ := range r.prs {
 		nodes = append(nodes, id)
 	}
 	sort.Sort(uint64Slice(nodes))
-	return nodes
+
+	weights := make([]uint32, 0, len(nodes))
+	for _, id := range nodes {
+		weights = append(weights, r.prs[id].Weight)
+	}
+
+	return nodes, weights
 }
 
 func (r *raft) learnerNodes() []uint64 {
@@ -457,7 +482,11 @@ func (r *raft) send(m pb.Message) {
 	r.msgs = append(r.msgs, m)
 }
 
-func (r *raft) getProgress(id uint64) *Progress {
+func (r *raft) getProgress(id uint64, isLocked bool) *Progress {
+	if !isLocked {
+		r.lockPrs.RLock()
+		defer r.lockPrs.RUnlock()
+	}
 	if pr, ok := r.prs[id]; ok {
 		return pr
 	}
@@ -477,7 +506,7 @@ func (r *raft) sendAppend(to uint64) {
 // ("empty" messages are useful to convey updated Commit indexes, but
 // are undesirable when we're sending multiple messages in a batch).
 func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
-	pr := r.getProgress(to)
+	pr := r.getProgress(to, false)
 	if pr.IsPaused() {
 		return false
 	}
@@ -546,7 +575,7 @@ func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
 	// or it might not have all the committed entries.
 	// The leader MUST NOT forward the follower's commit to
 	// an unmatched index.
-	commit := min(r.getProgress(to).Match, r.raftLog.committed)
+	commit := min(r.getProgress(to, false).Match, r.raftLog.committed)
 	m := pb.Message{
 		To:      to,
 		Type:    pb.MsgHeartbeat,
@@ -557,7 +586,12 @@ func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
 	r.send(m)
 }
 
-func (r *raft) forEachProgress(f func(id uint64, pr *Progress)) {
+func (r *raft) forEachProgress(f func(id uint64, pr *Progress), isLocked bool) {
+	if !isLocked {
+		r.lockPrs.RLock()
+		defer r.lockPrs.RUnlock()
+
+	}
 	for id, pr := range r.prs {
 		f(id, pr)
 	}
@@ -569,34 +603,40 @@ func (r *raft) forEachProgress(f func(id uint64, pr *Progress)) {
 
 // bcastAppend sends RPC, with entries to all peers that are not up-to-date
 // according to the progress recorded in r.prs.
-func (r *raft) bcastAppend() {
+func (r *raft) bcastAppend(isLocked bool) {
 	r.forEachProgress(func(id uint64, _ *Progress) {
 		if id == r.id {
 			return
 		}
 
 		r.sendAppend(id)
-	})
+	}, isLocked)
 }
 
 // bcastHeartbeat sends RPC, without entries to all the peers.
-func (r *raft) bcastHeartbeat() {
+func (r *raft) bcastHeartbeat(isLocked bool) {
 	lastCtx := r.readOnly.lastPendingRequestCtx()
 	if len(lastCtx) == 0 {
-		r.bcastHeartbeatWithCtx(nil)
+		r.bcastHeartbeatWithCtx(nil, isLocked)
 	} else {
-		r.bcastHeartbeatWithCtx([]byte(lastCtx))
+		r.bcastHeartbeatWithCtx([]byte(lastCtx), isLocked)
 	}
 }
 
-func (r *raft) bcastHeartbeatWithCtx(ctx []byte) {
+func (r *raft) bcastHeartbeatWithCtx(ctx []byte, isLocked bool) {
 	r.forEachProgress(func(id uint64, _ *Progress) {
 		if id == r.id {
 			return
 		}
 		r.sendHeartbeat(id, ctx)
-	})
+	}, isLocked)
 }
+
+type ByReverseMatch []*Progress
+
+func (a ByReverseMatch) Len() int           { return len(a) }
+func (a ByReverseMatch) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByReverseMatch) Less(i, j int) bool { return a[i].Weight > a[j].Weight }
 
 // maybeCommit attempts to advance the commit index. Returns true if
 // the commit index changed (in which case the caller should call
@@ -605,16 +645,37 @@ func (r *raft) maybeCommit() bool {
 	// Preserving matchBuf across calls is an optimization
 	// used to avoid allocating a new slice on each call.
 	if cap(r.matchBuf) < len(r.prs) {
-		r.matchBuf = make(uint64Slice, len(r.prs))
+		r.matchBuf = make([]*Progress, len(r.prs))
 	}
 	mis := r.matchBuf[:len(r.prs)]
 	idx := 0
 	for _, p := range r.prs {
-		mis[idx] = p.Match
+		mis[idx] = p
 		idx++
 	}
-	sort.Sort(mis)
-	mci := mis[len(mis)-r.quorum()]
+	sort.Sort(ByReverseMatch(mis))
+
+	// sorted with weight from large to lower. we would like to know the match of the quorum
+
+	quorum := r.quorum()
+	totalWeight := 0
+	mci := uint64(0)
+
+	for _, p := range mis {
+		totalWeight += int(p.Weight)
+		if totalWeight >= quorum {
+			mci = p.Match
+			break
+		}
+	}
+
+	return r.raftLog.maybeCommit(mci, r.Term)
+}
+
+func (r *raft) mustCommit() bool {
+	pr := r.getProgress(r.id, false)
+	mci := pr.Match
+
 	return r.raftLog.maybeCommit(mci, r.Term)
 }
 
@@ -632,12 +693,15 @@ func (r *raft) reset(term uint64) {
 	r.abortLeaderTransfer()
 
 	r.votes = make(map[uint64]bool)
+
 	r.forEachProgress(func(id uint64, pr *Progress) {
-		*pr = Progress{Next: r.raftLog.lastIndex() + 1, ins: newInflights(r.maxInflight), IsLearner: pr.IsLearner}
+		origWeight := pr.Weight
+		*pr = Progress{Next: r.raftLog.lastIndex() + 1, ins: newInflights(r.maxInflight), IsLearner: pr.IsLearner, Weight: origWeight}
 		if id == r.id {
 			pr.Match = r.raftLog.lastIndex()
 		}
-	})
+	}, false)
+	r.calcTotalWeight(false)
 
 	r.pendingConfIndex = 0
 	r.uncommittedSize = 0
@@ -661,7 +725,7 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 	}
 	// use latest "last" index after truncate/append
 	li = r.raftLog.append(es...)
-	r.getProgress(r.id).maybeUpdate(li)
+	r.getProgress(r.id, false).maybeUpdate(li)
 	// Regardless of maybeCommit's return, our caller will call bcastAppend.
 	r.maybeCommit()
 	return true
@@ -780,6 +844,7 @@ func (r *raft) becomeLeader() {
 func (r *raft) campaign(t CampaignType) {
 	var term uint64
 	var voteMsg pb.MessageType
+
 	if t == campaignPreElection {
 		r.becomePreCandidate()
 		voteMsg = pb.MsgPreVote
@@ -790,7 +855,8 @@ func (r *raft) campaign(t CampaignType) {
 		voteMsg = pb.MsgVote
 		term = r.Term
 	}
-	if r.quorum() == r.poll(r.id, voteRespMsgType(voteMsg), true) {
+	granted, _ := r.poll(r.id, voteRespMsgType(voteMsg), true, false)
+	if granted >= r.quorum() {
 		// We won the election after voting for ourselves (which must mean that
 		// this is a single-node cluster). Advance to the next state.
 		if t == campaignPreElection {
@@ -815,7 +881,7 @@ func (r *raft) campaign(t CampaignType) {
 	}
 }
 
-func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int) {
+func (r *raft) poll(id uint64, t pb.MessageType, v bool, isLocked bool) (granted int, rejected int) {
 	if v {
 		r.logger.Infof("%x received %s from %x at term %d", r.id, t, id, r.Term)
 	} else {
@@ -824,12 +890,28 @@ func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int) {
 	if _, ok := r.votes[id]; !ok {
 		r.votes[id] = v
 	}
-	for _, vv := range r.votes {
+
+	if !isLocked {
+		r.lockPrs.RLock()
+		defer r.lockPrs.RUnlock()
+	}
+
+	for eachID, vv := range r.votes {
+		pr, ok := r.prs[eachID]
+		if !ok {
+			continue
+		}
+
+		weight := int(pr.Weight)
+
 		if vv {
-			granted++
+			granted += weight
+		} else {
+			rejected += weight
 		}
 	}
-	return granted
+
+	return granted, rejected
 }
 
 func (r *raft) Step(m pb.Message) error {
@@ -982,18 +1064,24 @@ func stepLeader(r *raft, m pb.Message) error {
 	// These message types do not require any progress for m.From.
 	switch m.Type {
 	case pb.MsgBeat:
-		r.bcastHeartbeat()
+		r.bcastHeartbeat(false)
 		return nil
 	case pb.MsgCheckQuorum:
-		if !r.checkQuorumActive() {
+		if !r.checkQuorumActive(false) {
 			r.logger.Warningf("%x stepped down to follower since quorum is not active", r.id)
 			r.becomeFollower(r.Term, None)
 		}
 		return nil
+	case pb.MsgForceProp:
+		return r.handleForceProp(m)
 	case pb.MsgProp:
 		if len(m.Entries) == 0 {
 			r.logger.Panicf("%x stepped empty MsgProp", r.id)
 		}
+
+		r.lockPrs.RLock()
+		defer r.lockPrs.RUnlock()
+
 		if _, ok := r.prs[r.id]; !ok {
 			// If we are not currently a member of the range (i.e. this node
 			// was removed from the configuration while serving as leader),
@@ -1007,9 +1095,16 @@ func stepLeader(r *raft, m pb.Message) error {
 
 		for i, e := range m.Entries {
 			if e.Type == pb.EntryConfChange {
+				var cc pb.ConfChange
+				cc.Unmarshal(e.Data)
+				_, ok := r.prs[cc.NodeID]
 				if r.pendingConfIndex > r.raftLog.applied {
 					r.logger.Infof("propose conf %s ignored since pending unapplied configuration [index %d, applied %d]",
 						e.String(), r.pendingConfIndex, r.raftLog.applied)
+					m.Entries[i] = pb.Entry{Type: pb.EntryNormal}
+				} else if cc.Weight > 1 && !ok {
+					r.logger.Infof("propose conf %s ignored since weight > 1 and node-id not in prs: weight: %d node-id: %d",
+						e.String(), cc.Weight, cc.NodeID)
 					m.Entries[i] = pb.Entry{Type: pb.EntryNormal}
 				} else {
 					r.pendingConfIndex = r.raftLog.lastIndex() + uint64(i) + 1
@@ -1020,7 +1115,7 @@ func stepLeader(r *raft, m pb.Message) error {
 		if !r.appendEntry(m.Entries...) {
 			return ErrProposalDropped
 		}
-		r.bcastAppend()
+		r.bcastAppend(true)
 		return nil
 	case pb.MsgReadIndex:
 		if r.quorum() > 1 {
@@ -1034,8 +1129,8 @@ func stepLeader(r *raft, m pb.Message) error {
 			// This would allow multiple reads to piggyback on the same message.
 			switch r.readOnly.option {
 			case ReadOnlySafe:
-				r.readOnly.addRequest(r.raftLog.committed, m)
-				r.bcastHeartbeatWithCtx(m.Entries[0].Data)
+				r.readOnly.addRequest(r.raftLog.committed, m, r.id)
+				r.bcastHeartbeatWithCtx(m.Entries[0].Data, false)
 			case ReadOnlyLeaseBased:
 				ri := r.raftLog.committed
 				if m.From == None || m.From == r.id { // from local member
@@ -1056,7 +1151,7 @@ func stepLeader(r *raft, m pb.Message) error {
 	}
 
 	// All other message types require a progress for m.From (pr).
-	pr := r.getProgress(m.From)
+	pr := r.getProgress(m.From, false)
 	if pr == nil {
 		r.logger.Debugf("%x no progress available for %x", r.id, m.From)
 		return nil
@@ -1095,7 +1190,7 @@ func stepLeader(r *raft, m pb.Message) error {
 				}
 
 				if r.maybeCommit() {
-					r.bcastAppend()
+					r.bcastAppend(false)
 				} else if oldPaused {
 					// If we were paused before, this node may be missing the
 					// latest commit index, so send it.
@@ -1132,7 +1227,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			return nil
 		}
 
-		ackCount := r.readOnly.recvAck(m)
+		ackCount := r.readOnly.recvAck(m, r, false)
 		if ackCount < r.quorum() {
 			return nil
 		}
@@ -1217,6 +1312,8 @@ func stepCandidate(r *raft, m pb.Message) error {
 		myVoteRespType = pb.MsgVoteResp
 	}
 	switch m.Type {
+	case pb.MsgForceProp:
+		return r.handleForceProp(m)
 	case pb.MsgProp:
 		r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
 		return ErrProposalDropped
@@ -1230,17 +1327,18 @@ func stepCandidate(r *raft, m pb.Message) error {
 		r.becomeFollower(m.Term, m.From) // always m.Term == r.Term
 		r.handleSnapshot(m)
 	case myVoteRespType:
-		gr := r.poll(m.From, m.Type, !m.Reject)
-		r.logger.Infof("%x [quorum:%d] has received %d %s votes and %d vote rejections", r.id, r.quorum(), gr, m.Type, len(r.votes)-gr)
-		switch r.quorum() {
-		case gr:
+		gr, rej := r.poll(m.From, m.Type, !m.Reject, false)
+		quorum := r.quorum()
+		r.logger.Infof("%x [quorum:%d] has received %d %s votes and %d vote rejections", r.id, quorum, gr, m.Type, rej)
+		switch {
+		case gr >= quorum:
 			if r.state == StatePreCandidate {
 				r.campaign(campaignElection)
 			} else {
 				r.becomeLeader()
-				r.bcastAppend()
+				r.bcastAppend(false)
 			}
-		case len(r.votes) - gr:
+		case rej >= quorum:
 			// pb.MsgPreVoteResp contains future term of pre-candidate
 			// m.Term > r.Term; reuse r.Term
 			r.becomeFollower(r.Term, None)
@@ -1253,6 +1351,8 @@ func stepCandidate(r *raft, m pb.Message) error {
 
 func stepFollower(r *raft, m pb.Message) error {
 	switch m.Type {
+	case pb.MsgForceProp:
+		return r.handleForceProp(m)
 	case pb.MsgProp:
 		if r.lead == None {
 			r.logger.Infof("%x no leader at term %d; dropping proposal", r.id, r.Term)
@@ -1306,6 +1406,20 @@ func stepFollower(r *raft, m pb.Message) error {
 		}
 		r.readStates = append(r.readStates, ReadState{Index: m.Index, RequestCtx: m.Entries[0].Data})
 	}
+	return nil
+}
+
+func (r *raft) handleForceProp(m pb.Message) error {
+	if r.state != StateLeader {
+		if r.state == StateFollower {
+			r.becomeCandidate()
+		}
+		r.becomeLeader()
+		r.bcastAppend(false)
+	}
+	r.appendEntry(m.Entries...)
+	r.mustCommit()
+	r.bcastAppend(false)
 	return nil
 }
 
@@ -1371,21 +1485,49 @@ func (r *raft) restore(s pb.Snapshot) bool {
 	r.raftLog.restore(s)
 	r.prs = make(map[uint64]*Progress)
 	r.learnerPrs = make(map[uint64]*Progress)
-	r.restoreNode(s.Metadata.ConfState.Nodes, false)
-	r.restoreNode(s.Metadata.ConfState.Learners, true)
+	r.restoreNode(s.Metadata.ConfState.Nodes, s.Metadata.ConfState.Weights, false, false)
+	r.restoreNode(s.Metadata.ConfState.Learners, nil, true, false)
 	return true
 }
 
-func (r *raft) restoreNode(nodes []uint64, isLearner bool) {
-	for _, n := range nodes {
+func (r *raft) restoreNode(nodes []uint64, weights []uint32, isLearner bool, isLocked bool) {
+	if !isLocked {
+		r.lockPrs.Lock()
+		defer r.lockPrs.Unlock()
+	}
+
+	for i, n := range nodes {
+		weight := uint32(1)
+		if weights != nil {
+			weight = weights[i]
+		}
+		if isLearner {
+			weight = 0
+		}
+
 		match, next := uint64(0), r.raftLog.lastIndex()+1
 		if n == r.id {
 			match = next - 1
 			r.isLearner = isLearner
 		}
-		r.setProgress(n, match, next, isLearner)
-		r.logger.Infof("%x restored progress of %x [%s]", r.id, n, r.getProgress(n))
+		r.setProgress(n, match, next, isLearner, weight, false, true)
+		r.logger.Infof("%x restored progress of %x [%s]", r.id, n, r.getProgress(n, true))
 	}
+	r.calcTotalWeight(true)
+}
+
+func (r *raft) calcTotalWeight(isLocked bool) {
+	if !isLocked {
+		r.lockPrs.RLock()
+		defer r.lockPrs.RUnlock()
+	}
+
+	r.totalWeight = 0
+	tmpTotalWeight := uint32(0)
+	for _, ps := range r.prs {
+		tmpTotalWeight += ps.Weight
+	}
+	r.totalWeight = int(tmpTotalWeight)
 }
 
 // promotable indicates whether state machine can be promoted to leader,
@@ -1395,18 +1537,23 @@ func (r *raft) promotable() bool {
 	return ok
 }
 
-func (r *raft) addNode(id uint64) {
-	r.addNodeOrLearnerNode(id, false)
+func (r *raft) addNode(id uint64, weight uint32) {
+	r.addNodeOrLearnerNode(id, false, weight, false)
 }
 
 func (r *raft) addLearner(id uint64) {
-	r.addNodeOrLearnerNode(id, true)
+	r.addNodeOrLearnerNode(id, true, 0, false)
 }
 
-func (r *raft) addNodeOrLearnerNode(id uint64, isLearner bool) {
-	pr := r.getProgress(id)
+func (r *raft) addNodeOrLearnerNode(id uint64, isLearner bool, weight uint32, isLocked bool) {
+	if !isLocked {
+		r.lockPrs.Lock()
+		defer r.lockPrs.Unlock()
+	}
+
+	pr := r.getProgress(id, true)
 	if pr == nil {
-		r.setProgress(id, 0, r.raftLog.lastIndex()+1, isLearner)
+		r.setProgress(id, 0, r.raftLog.lastIndex()+1, isLearner, weight, false, true)
 	} else {
 		if isLearner && !pr.IsLearner {
 			// can only change Learner to Voter
@@ -1414,7 +1561,7 @@ func (r *raft) addNodeOrLearnerNode(id uint64, isLearner bool) {
 			return
 		}
 
-		if isLearner == pr.IsLearner {
+		if isLearner == pr.IsLearner && weight == pr.Weight {
 			// Ignore any redundant addNode calls (which can happen because the
 			// initial bootstrapping entries are applied twice).
 			return
@@ -1423,8 +1570,10 @@ func (r *raft) addNodeOrLearnerNode(id uint64, isLearner bool) {
 		// change Learner to Voter, use origin Learner progress
 		delete(r.learnerPrs, id)
 		pr.IsLearner = false
+		pr.Weight = weight
 		r.prs[id] = pr
 	}
+	r.calcTotalWeight(true)
 
 	if r.id == id {
 		r.isLearner = isLearner
@@ -1433,12 +1582,12 @@ func (r *raft) addNodeOrLearnerNode(id uint64, isLearner bool) {
 	// When a node is first added, we should mark it as recently active.
 	// Otherwise, CheckQuorum may cause us to step down if it is invoked
 	// before the added node has a chance to communicate with us.
-	pr = r.getProgress(id)
+	pr = r.getProgress(id, true)
 	pr.RecentActive = true
 }
 
 func (r *raft) removeNode(id uint64) {
-	r.delProgress(id)
+	r.delProgress(id, false)
 
 	// do not try to commit or abort transferring if there is no nodes in the cluster.
 	if len(r.prs) == 0 && len(r.learnerPrs) == 0 {
@@ -1448,7 +1597,7 @@ func (r *raft) removeNode(id uint64) {
 	// The quorum size is now smaller, so see if any pending entries can
 	// be committed.
 	if r.maybeCommit() {
-		r.bcastAppend()
+		r.bcastAppend(false)
 	}
 	// If the removed node is the leadTransferee, then abort the leadership transferring.
 	if r.state == StateLeader && r.leadTransferee == id {
@@ -1456,22 +1605,41 @@ func (r *raft) removeNode(id uint64) {
 	}
 }
 
-func (r *raft) setProgress(id, match, next uint64, isLearner bool) {
+func (r *raft) setProgress(id, match, next uint64, isLearner bool, weight uint32, isCalc bool, isLocked bool) {
+
+	if !isLocked {
+		r.lockPrs.Lock()
+		defer r.lockPrs.Unlock()
+	}
+
+	defer func() {
+		if isCalc {
+			r.calcTotalWeight(true)
+		}
+	}()
+
 	if !isLearner {
 		delete(r.learnerPrs, id)
-		r.prs[id] = &Progress{Next: next, Match: match, ins: newInflights(r.maxInflight)}
+		r.prs[id] = &Progress{Next: next, Match: match, ins: newInflights(r.maxInflight), Weight: weight}
 		return
 	}
 
 	if _, ok := r.prs[id]; ok {
 		panic(fmt.Sprintf("%x unexpected changing from voter to learner for %x", r.id, id))
 	}
-	r.learnerPrs[id] = &Progress{Next: next, Match: match, ins: newInflights(r.maxInflight), IsLearner: true}
+	r.learnerPrs[id] = &Progress{Next: next, Match: match, ins: newInflights(r.maxInflight), IsLearner: true, Weight: 0}
 }
 
-func (r *raft) delProgress(id uint64) {
+func (r *raft) delProgress(id uint64, isLocked bool) {
+	if !isLocked {
+		r.lockPrs.Lock()
+		defer r.lockPrs.Unlock()
+	}
+
 	delete(r.prs, id)
 	delete(r.learnerPrs, id)
+
+	r.calcTotalWeight(true)
 }
 
 func (r *raft) loadState(state pb.HardState) {
@@ -1498,21 +1666,21 @@ func (r *raft) resetRandomizedElectionTimeout() {
 // the view of the local raft state machine. Otherwise, it returns
 // false.
 // checkQuorumActive also resets all RecentActive to false.
-func (r *raft) checkQuorumActive() bool {
+func (r *raft) checkQuorumActive(isLocked bool) bool {
 	var act int
 
 	r.forEachProgress(func(id uint64, pr *Progress) {
 		if id == r.id { // self is always active
-			act++
+			act += int(pr.Weight)
 			return
 		}
 
 		if pr.RecentActive && !pr.IsLearner {
-			act++
+			act += int(pr.Weight)
 		}
 
 		pr.RecentActive = false
-	})
+	}, isLocked)
 
 	return act >= r.quorum()
 }
