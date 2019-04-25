@@ -36,6 +36,9 @@ func (st ProgressStateType) String() string { return prstmap[uint64(st)] }
 // progresses of all followers, and sends entries to the follower based on its progress.
 type Progress struct {
 	Match, Next uint64
+
+	Weight uint32
+
 	// State defines how the leader should interact with the follower.
 	//
 	// When in ProgressStateProbe, leader sends at most one replication message
@@ -185,7 +188,7 @@ func (pr *Progress) needSnapshotAbort() bool {
 }
 
 func (pr *Progress) String() string {
-	return fmt.Sprintf("next = %d, match = %d, state = %s, waiting = %v, pendingSnapshot = %d", pr.Next, pr.Match, pr.State, pr.IsPaused(), pr.PendingSnapshot)
+	return fmt.Sprintf("next = %d, match = %d, state = %s, waiting = %v, pendingSnapshot = %d, weight = %d", pr.Next, pr.Match, pr.State, pr.IsPaused(), pr.PendingSnapshot, pr.Weight)
 }
 
 type inflights struct {
