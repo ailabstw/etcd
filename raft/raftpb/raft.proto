@@ -78,6 +78,7 @@ message HardState {
 message ConfState {
 	repeated uint64 nodes    = 1;
 	repeated uint64 learners = 2;
+	repeated uint32 weights  = 3;
 }
 
 enum ConfChangeType {
@@ -91,5 +92,6 @@ message ConfChange {
 	optional uint64          ID      = 1 [(gogoproto.nullable) = false];
 	optional ConfChangeType  Type    = 2 [(gogoproto.nullable) = false];
 	optional uint64          NodeID  = 3 [(gogoproto.nullable) = false];
-	optional bytes           Context = 4;
+	optional uint32          Weight  = 4 [(gogoproto.nullable) = false];
+	optional bytes           Context = 5;
 }

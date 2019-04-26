@@ -89,7 +89,7 @@ func NewRawNode(config *Config, peers []Peer) (*RawNode, error) {
 		r.becomeFollower(1, None)
 		ents := make([]pb.Entry, len(peers))
 		for i, peer := range peers {
-			cc := pb.ConfChange{Type: pb.ConfChangeAddNode, NodeID: peer.ID, Context: peer.Context}
+			cc := pb.ConfChange{Type: pb.ConfChangeAddNode, NodeID: peer.ID, Context: peer.Context, Weight: peer.Weight}
 			data, err := cc.Marshal()
 			if err != nil {
 				panic("unexpected marshal error")
@@ -100,7 +100,7 @@ func NewRawNode(config *Config, peers []Peer) (*RawNode, error) {
 		r.raftLog.append(ents...)
 		r.raftLog.committed = uint64(len(ents))
 		for _, peer := range peers {
-			r.addNode(peer.ID)
+			r.addNode(peer.ID, peer.Weight)
 		}
 	}
 
@@ -166,11 +166,12 @@ func (rn *RawNode) ProposeConfChange(cc pb.ConfChange) error {
 // ApplyConfChange applies a config change to the local node.
 func (rn *RawNode) ApplyConfChange(cc pb.ConfChange) *pb.ConfState {
 	if cc.NodeID == None {
-		return &pb.ConfState{Nodes: rn.raft.nodes(), Learners: rn.raft.learnerNodes()}
+		nodes, weights := rn.raft.nodes(false)
+		return &pb.ConfState{Nodes: nodes, Weights: weights, Learners: rn.raft.learnerNodes()}
 	}
 	switch cc.Type {
 	case pb.ConfChangeAddNode:
-		rn.raft.addNode(cc.NodeID)
+		rn.raft.addNode(cc.NodeID, cc.Weight)
 	case pb.ConfChangeAddLearnerNode:
 		rn.raft.addLearner(cc.NodeID)
 	case pb.ConfChangeRemoveNode:
@@ -179,7 +180,8 @@ func (rn *RawNode) ApplyConfChange(cc pb.ConfChange) *pb.ConfState {
 	default:
 		panic("unexpected conf type")
 	}
-	return &pb.ConfState{Nodes: rn.raft.nodes(), Learners: rn.raft.learnerNodes()}
+	nodes2, weights2 := rn.raft.nodes(false)
+	return &pb.ConfState{Nodes: nodes2, Weights: weights2, Learners: rn.raft.learnerNodes()}
 }
 
 // Step advances the state machine using the given message.
@@ -188,7 +190,7 @@ func (rn *RawNode) Step(m pb.Message) error {
 	if IsLocalMsg(m.Type) {
 		return ErrStepLocalMsg
 	}
-	if pr := rn.raft.getProgress(m.From); pr != nil || !IsResponseMsg(m.Type) {
+	if pr := rn.raft.getProgress(m.From, false); pr != nil || !IsResponseMsg(m.Type) {
 		return rn.raft.Step(m)
 	}
 	return ErrStepPeerNotFound

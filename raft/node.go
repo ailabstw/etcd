@@ -192,6 +192,7 @@ type Node interface {
 
 type Peer struct {
 	ID      uint64
+	Weight  uint32
 	Context []byte
 }
 
@@ -203,7 +204,7 @@ func StartNode(c *Config, peers []Peer) Node {
 	// entries of term 1
 	r.becomeFollower(1, None)
 	for _, peer := range peers {
-		cc := pb.ConfChange{Type: pb.ConfChangeAddNode, NodeID: peer.ID, Context: peer.Context}
+		cc := pb.ConfChange{Type: pb.ConfChangeAddNode, NodeID: peer.ID, Context: peer.Context, Weight: peer.Weight}
 		d, err := cc.Marshal()
 		if err != nil {
 			panic("unexpected marshal error")
@@ -225,7 +226,7 @@ func StartNode(c *Config, peers []Peer) Node {
 	// We do not set raftLog.applied so the application will be able
 	// to observe all conf changes via Ready.CommittedEntries.
 	for _, peer := range peers {
-		r.addNode(peer.ID)
+		r.addNode(peer.ID, peer.Weight)
 	}
 
 	n := newNode()
@@ -353,14 +354,16 @@ func (n *node) run(r *raft) {
 			}
 		case m := <-n.recvc:
 			// filter out response message from unknown From.
-			if pr := r.getProgress(m.From); pr != nil || !IsResponseMsg(m.Type) {
+			if pr := r.getProgress(m.From, false); pr != nil || !IsResponseMsg(m.Type) {
 				r.Step(m)
 			}
 		case cc := <-n.confc:
 			if cc.NodeID == None {
+				nodes, weights := r.nodes(false)
 				select {
 				case n.confstatec <- pb.ConfState{
-					Nodes:    r.nodes(),
+					Nodes:    nodes,
+					Weights:  weights,
 					Learners: r.learnerNodes()}:
 				case <-n.done:
 				}
@@ -368,7 +371,7 @@ func (n *node) run(r *raft) {
 			}
 			switch cc.Type {
 			case pb.ConfChangeAddNode:
-				r.addNode(cc.NodeID)
+				r.addNode(cc.NodeID, cc.Weight)
 			case pb.ConfChangeAddLearnerNode:
 				r.addLearner(cc.NodeID)
 			case pb.ConfChangeRemoveNode:
@@ -382,9 +385,11 @@ func (n *node) run(r *raft) {
 			default:
 				panic("unexpected conf type")
 			}
+			nodes2, weights2 := r.nodes(false)
 			select {
 			case n.confstatec <- pb.ConfState{
-				Nodes:    r.nodes(),
+				Nodes:    nodes2,
+				Weights:  weights2,
 				Learners: r.learnerNodes()}:
 			case <-n.done:
 			}
@@ -465,6 +470,14 @@ func (n *node) ProposeConfChange(ctx context.Context, cc pb.ConfChange) error {
 		return err
 	}
 	return n.Step(ctx, pb.Message{Type: pb.MsgProp, Entries: []pb.Entry{{Type: pb.EntryConfChange, Data: data}}})
+}
+
+func (n *node) ForceProposeConfChange(ctx context.Context, cc pb.ConfChange) error {
+	data, err := cc.Marshal()
+	if err != nil {
+		return err
+	}
+	return n.Step(ctx, pb.Message{Type: pb.MsgForceProp, Entries: []pb.Entry{{Type: pb.EntryConfChange, Data: data}}})
 }
 
 func (n *node) step(ctx context.Context, m pb.Message) error {

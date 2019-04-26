@@ -49,27 +49,44 @@ func newReadOnly(option ReadOnlyOption) *readOnly {
 // `index` is the commit index of the raft state machine when it received
 // the read only request.
 // `m` is the original read only request message from the local or remote node.
-func (ro *readOnly) addRequest(index uint64, m pb.Message) {
+func (ro *readOnly) addRequest(index uint64, m pb.Message, leaderID uint64) {
 	ctx := string(m.Entries[0].Data)
 	if _, ok := ro.pendingReadIndex[ctx]; ok {
 		return
 	}
-	ro.pendingReadIndex[ctx] = &readIndexStatus{index: index, req: m, acks: make(map[uint64]struct{})}
+
+	acks := make(map[uint64]struct{})
+	acks[leaderID] = struct{}{}
+	ro.pendingReadIndex[ctx] = &readIndexStatus{index: index, req: m, acks: acks}
 	ro.readIndexQueue = append(ro.readIndexQueue, ctx)
 }
 
 // recvAck notifies the readonly struct that the raft state machine received
 // an acknowledgment of the heartbeat that attached with the read only request
 // context.
-func (ro *readOnly) recvAck(m pb.Message) int {
+func (ro *readOnly) recvAck(m pb.Message, r *raft, isLocked bool) int {
 	rs, ok := ro.pendingReadIndex[string(m.Context)]
 	if !ok {
 		return 0
 	}
 
 	rs.acks[m.From] = struct{}{}
+
+	if !isLocked {
+		r.lockPrs.RLock()
+		defer r.lockPrs.RUnlock()
+	}
+
 	// add one to include an ack from local node
-	return len(rs.acks) + 1
+	acks := 0
+	for id, _ := range rs.acks {
+		pr, ok := r.prs[id]
+		if !ok {
+			continue
+		}
+		acks += int(pr.Weight)
+	}
+	return acks
 }
 
 // advance advances the read only request queue kept by the readonly struct.

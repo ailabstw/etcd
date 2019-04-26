@@ -323,7 +323,7 @@ func TestNodeProposeConfig(t *testing.T) {
 		}
 		n.Advance()
 	}
-	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1}
+	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Weight: 1}
 	ccdata, err := cc.Marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -348,6 +348,7 @@ func TestNodeProposeAddDuplicateNode(t *testing.T) {
 	n := newNode()
 	s := NewMemoryStorage()
 	r := newTestRaft(1, []uint64{1}, 10, 1, s)
+
 	go n.run(r)
 	n.Campaign(context.TODO())
 	rdyEntries := make([]raftpb.Entry, 0)
@@ -387,7 +388,7 @@ func TestNodeProposeAddDuplicateNode(t *testing.T) {
 		}
 	}()
 
-	cc1 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1}
+	cc1 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Weight: 1}
 	ccdata1, _ := cc1.Marshal()
 	n.ProposeConfChange(context.TODO(), cc1)
 	<-applyConfChan
@@ -397,7 +398,7 @@ func TestNodeProposeAddDuplicateNode(t *testing.T) {
 	<-applyConfChan
 
 	// the new node join should be ok
-	cc2 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 2}
+	cc2 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 2, Weight: 1}
 	ccdata2, _ := cc2.Marshal()
 	n.ProposeConfChange(context.TODO(), cc2)
 	<-applyConfChan
@@ -576,7 +577,7 @@ func TestNodeStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1}
+	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Weight: 1}
 	ccdata, err := cc.Marshal()
 	if err != nil {
 		t.Fatalf("unexpected marshal error: %v", err)
@@ -608,7 +609,7 @@ func TestNodeStart(t *testing.T) {
 		MaxSizePerMsg:   noLimit,
 		MaxInflightMsgs: 256,
 	}
-	n := StartNode(c, []Peer{{ID: 1}})
+	n := StartNode(c, []Peer{{ID: 1, Weight: 1}})
 	defer n.Stop()
 	g := <-n.Ready()
 	if !reflect.DeepEqual(g, wants[0]) {
@@ -680,7 +681,7 @@ func TestNodeRestart(t *testing.T) {
 func TestNodeRestartFromSnapshot(t *testing.T) {
 	snap := raftpb.Snapshot{
 		Metadata: raftpb.SnapshotMetadata{
-			ConfState: raftpb.ConfState{Nodes: []uint64{1, 2}},
+			ConfState: raftpb.ConfState{Nodes: []uint64{1, 2}, Weights: []uint32{1, 1}},
 			Index:     2,
 			Term:      1,
 		},
@@ -737,7 +738,7 @@ func TestNodeAdvance(t *testing.T) {
 		MaxSizePerMsg:   noLimit,
 		MaxInflightMsgs: 256,
 	}
-	n := StartNode(c, []Peer{{ID: 1}})
+	n := StartNode(c, []Peer{{ID: 1, Weight: 1}})
 	defer n.Stop()
 	rd := <-n.Ready()
 	storage.Append(rd.Entries)
@@ -840,7 +841,7 @@ func TestNodeProposeAddLearnerNode(t *testing.T) {
 			}
 		}
 	}()
-	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddLearnerNode, NodeID: 2}
+	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddLearnerNode, NodeID: 2, Weight: 1}
 	n.ProposeConfChange(context.TODO(), cc)
 	<-applyConfChan
 	close(stop)

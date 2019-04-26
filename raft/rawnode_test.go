@@ -27,7 +27,7 @@ import (
 func TestRawNodeStep(t *testing.T) {
 	for i, msgn := range raftpb.MessageType_name {
 		s := NewMemoryStorage()
-		rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, s), []Peer{{ID: 1}})
+		rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, s), []Peer{{ID: 1, Weight: 1}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -50,7 +50,7 @@ func TestRawNodeStep(t *testing.T) {
 func TestRawNodeProposeAndConfChange(t *testing.T) {
 	s := NewMemoryStorage()
 	var err error
-	rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, s), []Peer{{ID: 1}})
+	rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, s), []Peer{{ID: 1, Weight: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestRawNodeProposeAndConfChange(t *testing.T) {
 		if !proposed && rd.SoftState.Lead == rawNode.raft.id {
 			rawNode.Propose([]byte("somedata"))
 
-			cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1}
+			cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Weight: 1}
 			ccdata, err = cc.Marshal()
 			if err != nil {
 				t.Fatal(err)
@@ -119,7 +119,7 @@ func TestRawNodeProposeAndConfChange(t *testing.T) {
 // not affect the later propose to add new node.
 func TestRawNodeProposeAddDuplicateNode(t *testing.T) {
 	s := NewMemoryStorage()
-	rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, s), []Peer{{ID: 1}})
+	rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, s), []Peer{{ID: 1, Weight: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestRawNodeProposeAddDuplicateNode(t *testing.T) {
 		rawNode.Advance(rd)
 	}
 
-	cc1 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1}
+	cc1 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Weight: 1}
 	ccdata1, err := cc1.Marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestRawNodeProposeAddDuplicateNode(t *testing.T) {
 	proposeConfChangeAndApply(cc1)
 
 	// the new node join should be ok
-	cc2 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 2}
+	cc2 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 2, Weight: 1}
 	ccdata2, err := cc2.Marshal()
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +203,7 @@ func TestRawNodeReadIndex(t *testing.T) {
 
 	s := NewMemoryStorage()
 	c := newTestConfig(1, nil, 10, 1, s)
-	rawNode, err := NewRawNode(c, []Peer{{ID: 1}})
+	rawNode, err := NewRawNode(c, []Peer{{ID: 1, Weight: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestRawNodeReadIndex(t *testing.T) {
 // start with correct configuration change entries, and can accept and commit
 // proposals.
 func TestRawNodeStart(t *testing.T) {
-	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1}
+	cc := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Weight: 1}
 	ccdata, err := cc.Marshal()
 	if err != nil {
 		t.Fatalf("unexpected marshal error: %v", err)
@@ -290,7 +290,7 @@ func TestRawNodeStart(t *testing.T) {
 	}
 
 	storage := NewMemoryStorage()
-	rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, storage), []Peer{{ID: 1}})
+	rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, storage), []Peer{{ID: 1, Weight: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestRawNodeRestartFromSnapshot(t *testing.T) {
 
 func TestRawNodeStatus(t *testing.T) {
 	storage := NewMemoryStorage()
-	rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, storage), []Peer{{ID: 1}})
+	rawNode, err := NewRawNode(newTestConfig(1, nil, 10, 1, storage), []Peer{{ID: 1, Weight: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +460,7 @@ func TestRawNodeCommitPaginationAfterRestart(t *testing.T) {
 		Data:  []byte("boom"),
 	})
 
-	rawNode, err := NewRawNode(cfg, []Peer{{ID: 1}})
+	rawNode, err := NewRawNode(cfg, []Peer{{ID: 1, Weight: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func TestRawNodeBoundedLogGrowthWithPartition(t *testing.T) {
 	s := NewMemoryStorage()
 	cfg := newTestConfig(1, []uint64{1}, 10, 1, s)
 	cfg.MaxUncommittedEntriesSize = maxEntrySize
-	rawNode, err := NewRawNode(cfg, []Peer{{ID: 1}})
+	rawNode, err := NewRawNode(cfg, []Peer{{ID: 1, Weight: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}

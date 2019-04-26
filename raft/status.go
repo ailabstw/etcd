@@ -32,8 +32,14 @@ type Status struct {
 	LeadTransferee uint64
 }
 
-func getProgressCopy(r *raft) map[uint64]Progress {
+func getProgressCopy(r *raft, isLocked bool) map[uint64]Progress {
 	prs := make(map[uint64]Progress)
+
+	if !isLocked {
+		r.lockPrs.RLock()
+		defer r.lockPrs.RUnlock()
+	}
+
 	for id, p := range r.prs {
 		prs[id] = *p
 	}
@@ -59,7 +65,7 @@ func getStatusWithoutProgress(r *raft) Status {
 func getStatus(r *raft) Status {
 	s := getStatusWithoutProgress(r)
 	if s.RaftState == StateLeader {
-		s.Progress = getProgressCopy(r)
+		s.Progress = getProgressCopy(r, false)
 	}
 	return s
 }

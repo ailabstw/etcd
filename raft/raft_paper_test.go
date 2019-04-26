@@ -496,7 +496,8 @@ func TestLeaderAcknowledgeCommit(t *testing.T) {
 		li := r.raftLog.lastIndex()
 		r.Step(pb.Message{From: 1, To: 1, Type: pb.MsgProp, Entries: []pb.Entry{{Data: []byte("some data")}}})
 
-		for _, m := range r.readMessages() {
+		msgs := r.readMessages()
+		for _, m := range msgs {
 			if tt.acceptors[m.To] {
 				r.Step(acceptAndReply(m))
 			}
@@ -906,7 +907,7 @@ func commitNoopEntry(r *raft, s *MemoryStorage) {
 	if r.state != StateLeader {
 		panic("it should only be used when it is the leader")
 	}
-	r.bcastAppend()
+	r.bcastAppend(false)
 	// simulate the response of MsgApp
 	msgs := r.readMessages()
 	for _, m := range msgs {
