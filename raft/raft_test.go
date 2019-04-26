@@ -1351,8 +1351,9 @@ func TestCommit(t *testing.T) {
 		storage.hardState = pb.HardState{Term: tt.smTerm}
 
 		sm := newTestRaft(1, []uint64{1}, 10, 2, storage)
+		fmt.Printf("TestCommit: (%d/%d) sm.prs: %v\n", i, len(tests), sm.prs)
 		for j := 0; j < len(tt.matches); j++ {
-			sm.setProgress(uint64(j)+1, tt.matches[j], tt.matches[j]+1, false, 1, false, false)
+			sm.setProgress(uint64(j)+1, tt.matches[j], tt.matches[j]+1, false, 1, true, false)
 		}
 		sm.maybeCommit()
 		if g := sm.raftLog.committed; g != tt.w {

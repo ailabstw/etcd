@@ -645,7 +645,7 @@ type ByReverseMatch []*Progress
 
 func (a ByReverseMatch) Len() int           { return len(a) }
 func (a ByReverseMatch) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByReverseMatch) Less(i, j int) bool { return a[i].Weight > a[j].Weight }
+func (a ByReverseMatch) Less(i, j int) bool { return a[i].Match > a[j].Match }
 
 // maybeCommit attempts to advance the commit index. Returns true if
 // the commit index changed (in which case the caller should call
@@ -925,6 +925,10 @@ func (r *raft) poll(id uint64, t pb.MessageType, v bool, isLocked bool) (granted
 
 func (r *raft) Step(m pb.Message) error {
 	// Handle the message term, which may result in our stepping down to a follower.
+
+	r.logger.Infof("Step: start: %x raftLog: [logterm: %d, index: %d, vote: %x] from: %d to: %d msg: [logterm: %d, index: %d term: %d] at term %d)",
+		r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.Vote, m.From, m.To, m.LogTerm, m.Index, m.Term, r.Term)
+
 	switch {
 	case m.Term == 0:
 		// local message

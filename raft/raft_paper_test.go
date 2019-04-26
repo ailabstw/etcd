@@ -502,9 +502,10 @@ func TestLeaderAcknowledgeCommit(t *testing.T) {
 
 		msgs := r.readMessages()
 		for u, m := range msgs {
-			fmt.Printf("TestLeaderAcknowledgeCommit: (%d/%d) readMsg: (%d/%d): m: %v commited: %d li: %v\n", i, len(tests), u, len(msgs), m, r.raftLog.committed, li)
+			fmt.Printf("TestLeaderAcknowledgeCommit: (%d/%d) readMsg: (%d/%d): m.To: %v commited: %d li: %v\n", i, len(tests), u, len(msgs), m.To, r.raftLog.committed, li)
 			if tt.acceptors[m.To] {
 				r.Step(acceptAndReply(m))
+				fmt.Printf("TestLeaderAcknowledgeCommit: (%d/%d) after Step: (%d/%d): m.To: %v commited: %d li: %v\n", i, len(tests), u, len(msgs), m.To, r.raftLog.committed, li)
 			}
 		}
 
