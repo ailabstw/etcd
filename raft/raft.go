@@ -377,7 +377,6 @@ func newRaft(c *Config) *raft {
 		disableProposalForwarding: c.DisableProposalForwarding,
 	}
 
-	r.logger.Infof("newRaft: cs.Nodes: %v cs.Weights: %v peers: %v", cs.Nodes, cs.Weights, peers)
 	for p, weight := range peers {
 		r.prs[p] = &Progress{Next: 1, ins: newInflights(r.maxInflight), Weight: weight}
 		r.totalWeight += int(weight)
@@ -424,7 +423,6 @@ func (r *raft) hardState() pb.HardState {
 }
 
 func (r *raft) quorum() int {
-	r.logger.Infof("quorum: totalWeight: %v, prs: %v", r.totalWeight, r.prs)
 	return r.totalWeight/2 + 1
 }
 
@@ -664,7 +662,7 @@ func (r *raft) maybeCommit() bool {
 	}
 	sort.Sort(ByReverseMatch(mis))
 
-	// sorted with weight from large to lower. we would like to know the match of the quorum
+	// sorted with match from large to lower. we would like to know the match of the quorum
 
 	quorum := r.quorum()
 	totalWeight := 0
@@ -853,7 +851,6 @@ func (r *raft) becomeLeader() {
 func (r *raft) campaign(t CampaignType) {
 	var term uint64
 	var voteMsg pb.MessageType
-
 	if t == campaignPreElection {
 		r.becomePreCandidate()
 		voteMsg = pb.MsgPreVote
@@ -925,10 +922,6 @@ func (r *raft) poll(id uint64, t pb.MessageType, v bool, isLocked bool) (granted
 
 func (r *raft) Step(m pb.Message) error {
 	// Handle the message term, which may result in our stepping down to a follower.
-
-	r.logger.Infof("Step: start: %x raftLog: [logterm: %d, index: %d, vote: %x] from: %d to: %d msg: [logterm: %d, index: %d term: %d] at term %d)",
-		r.id, r.raftLog.lastTerm(), r.raftLog.lastIndex(), r.Vote, m.From, m.To, m.LogTerm, m.Index, m.Term, r.Term)
-
 	switch {
 	case m.Term == 0:
 		// local message
@@ -1092,15 +1085,8 @@ func stepLeader(r *raft, m pb.Message) error {
 			r.logger.Panicf("%x stepped empty MsgProp", r.id)
 		}
 
-		r.logger.Infof("stepLeader (MsgProp): to RLock: %x [term %d]", r.id, r.Term)
-
 		r.lockPrs.RLock()
-		defer func() {
-			r.lockPrs.RUnlock()
-			r.logger.Infof("stepLeader (MsgProp): after RUnlock: %x [term %d]", r.id, r.Term)
-		}()
-
-		r.logger.Infof("stepLeader (MsgProp): in RLock: %x [term %d]", r.id, r.Term)
+		defer r.lockPrs.RUnlock()
 
 		if _, ok := r.prs[r.id]; !ok {
 			// If we are not currently a member of the range (i.e. this node
@@ -1119,8 +1105,6 @@ func stepLeader(r *raft, m pb.Message) error {
 				cc.Unmarshal(e.Data)
 				_, ok := r.prs[cc.NodeID]
 
-				r.logger.Infof("MsgProp (ConfChange): to check valid: pendingIndex: %d applied: %d weight: %v ok: %v", r.pendingConfIndex, r.raftLog.applied, cc.Weight, ok)
-
 				if r.pendingConfIndex > r.raftLog.applied {
 					r.logger.Infof("propose conf %s ignored since pending unapplied configuration [index %d, applied %d]",
 						e.String(), r.pendingConfIndex, r.raftLog.applied)
@@ -1134,19 +1118,10 @@ func stepLeader(r *raft, m pb.Message) error {
 				}
 			}
 		}
-
-		r.logger.Infof("stepLeader (MsgProp): after for-loop: %x [term %d]", r.id, r.Term)
-
 		if !r.appendEntry(m.Entries...) {
 			return ErrProposalDropped
 		}
-
-		r.logger.Infof("stepLeader (MsgProp): to bcastAppend: %x [term %d]", r.id, r.Term)
-
 		r.bcastAppend(true)
-
-		r.logger.Infof("stepLeader (MsgProp): after bcastAppend: %x [term %d]", r.id, r.Term)
-
 		return nil
 	case pb.MsgReadIndex:
 		if r.quorum() > 1 {

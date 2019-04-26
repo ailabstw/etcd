@@ -212,19 +212,11 @@ func TestNodeReadIndex(t *testing.T) {
 // the leader when DisableProposalForwarding is true.
 func TestDisableProposalForwarding(t *testing.T) {
 	r1 := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
-
-	fmt.Printf("TestDisableProposalForwarding: after newTestRaft: r1.prs: %v\n", r1.prs)
-
 	r2 := newTestRaft(2, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
 	cfg3 := newTestConfig(3, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
 	cfg3.DisableProposalForwarding = true
 	r3 := newRaft(cfg3)
-
-	fmt.Printf("TestDisableProposalForwarding: to newNetwork: r1.prs: %v\n", r1.prs)
-
 	nt := newNetwork(r1, r2, r3)
-
-	fmt.Printf("TestDisableProposalForwarding: after newNetwork: r1.prs: %v\n", r1.prs)
 
 	// elect r1 as leader
 	nt.send(raftpb.Message{From: 1, To: 1, Type: raftpb.MsgHup})
@@ -357,7 +349,6 @@ func TestNodeProposeAddDuplicateNode(t *testing.T) {
 	s := NewMemoryStorage()
 	r := newTestRaft(1, []uint64{1}, 10, 1, s)
 
-	fmt.Println("to node.Run")
 	go n.run(r)
 	n.Campaign(context.TODO())
 	rdyEntries := make([]raftpb.Entry, 0)
@@ -366,8 +357,6 @@ func TestNodeProposeAddDuplicateNode(t *testing.T) {
 	done := make(chan struct{})
 	stop := make(chan struct{})
 	applyConfChan := make(chan struct{})
-
-	fmt.Println("to go-func")
 
 	go func() {
 		defer close(done)
@@ -378,7 +367,6 @@ func TestNodeProposeAddDuplicateNode(t *testing.T) {
 			case <-ticker.C:
 				n.Tick()
 			case rd := <-n.Ready():
-				fmt.Printf("(go-func): received rd: %v\n", rd)
 				s.Append(rd.Entries)
 				applied := false
 				for _, e := range rd.Entries {
@@ -388,15 +376,11 @@ func TestNodeProposeAddDuplicateNode(t *testing.T) {
 					case raftpb.EntryConfChange:
 						var cc raftpb.ConfChange
 						cc.Unmarshal(e.Data)
-						fmt.Printf("(go-func): to ApplyConfChange: cc: %v\n", cc)
 						n.ApplyConfChange(cc)
-						fmt.Println("(go-func): after ApplyConfChange")
 						applied = true
 					}
 				}
-				fmt.Println("(go-func): to n.Advance")
 				n.Advance()
-				fmt.Printf("(go-func): after n.Advance: applied: %v\n", applied)
 				if applied {
 					applyConfChan <- struct{}{}
 				}
@@ -407,24 +391,19 @@ func TestNodeProposeAddDuplicateNode(t *testing.T) {
 	cc1 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 1, Weight: 1}
 	ccdata1, _ := cc1.Marshal()
 	n.ProposeConfChange(context.TODO(), cc1)
-	fmt.Println("after ProposeConfChange cc1")
 	<-applyConfChan
 
 	// try add the same node again
 	n.ProposeConfChange(context.TODO(), cc1)
-	fmt.Println("after ProposeConfChange cc1")
 	<-applyConfChan
 
 	// the new node join should be ok
 	cc2 := raftpb.ConfChange{Type: raftpb.ConfChangeAddNode, NodeID: 2, Weight: 1}
 	ccdata2, _ := cc2.Marshal()
 	n.ProposeConfChange(context.TODO(), cc2)
-	fmt.Println("after ProposeConfChange cc2")
 	<-applyConfChan
 
-	fmt.Println("to close stop")
 	close(stop)
-	fmt.Println("after close stop")
 	<-done
 
 	if len(rdyEntries) != 4 {
