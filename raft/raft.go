@@ -29,6 +29,8 @@ import (
 )
 
 // None is a placeholder node ID used when there is no leader.
+
+// None is a placeholder node ID used when there is no leader.
 const None uint64 = 0
 const noLimit = math.MaxUint64
 
@@ -337,6 +339,7 @@ func newRaft(c *Config) *raft {
 	}
 	peers := c.peers
 	learners := c.learners
+
 	if len(cs.Nodes) > 0 || len(cs.Learners) > 0 {
 		if len(peers) > 0 || len(learners) > 0 {
 			// TODO(bdarnell): the peers argument is always nil except in
@@ -373,6 +376,8 @@ func newRaft(c *Config) *raft {
 		readOnly:                  newReadOnly(c.ReadOnlyOption),
 		disableProposalForwarding: c.DisableProposalForwarding,
 	}
+
+	r.logger.Infof("newRaft: cs.Nodes: %v cs.Weights: %v peers: %v", cs.Nodes, cs.Weights, peers)
 	for p, weight := range peers {
 		r.prs[p] = &Progress{Next: 1, ins: newInflights(r.maxInflight), Weight: weight}
 		r.totalWeight += int(weight)
@@ -401,8 +406,8 @@ func newRaft(c *Config) *raft {
 		nodesStrs = append(nodesStrs, fmt.Sprintf("(%x:%d)", n, weights[i]))
 	}
 
-	r.logger.Infof("newRaft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d]",
-		r.id, strings.Join(nodesStrs, ","), r.Term, r.raftLog.committed, r.raftLog.applied, r.raftLog.lastIndex(), r.raftLog.lastTerm())
+	r.logger.Infof("newRaft %x [peers: [%s], term: %d, commit: %d, applied: %d, lastindex: %d, lastterm: %d] prs: %v",
+		r.id, strings.Join(nodesStrs, ","), r.Term, r.raftLog.committed, r.raftLog.applied, r.raftLog.lastIndex(), r.raftLog.lastTerm(), r.prs)
 	return r
 }
 
@@ -418,7 +423,10 @@ func (r *raft) hardState() pb.HardState {
 	}
 }
 
-func (r *raft) quorum() int { return r.totalWeight/2 + 1 }
+func (r *raft) quorum() int {
+	r.logger.Infof("quorum: totalWeight: %v, prs: %v", r.totalWeight, r.prs)
+	return r.totalWeight/2 + 1
+}
 
 func (r *raft) nodes(isLocked bool) ([]uint64, []uint32) {
 	if !isLocked {
@@ -787,7 +795,7 @@ func (r *raft) becomeCandidate() {
 	r.tick = r.tickElection
 	r.Vote = r.id
 	r.state = StateCandidate
-	r.logger.Infof("%x became candidate at term %d", r.id, r.Term)
+	r.logger.Infof("%x became candidate at term %d: prs: %v", r.id, r.Term, r.prs)
 }
 
 func (r *raft) becomePreCandidate() {
@@ -1002,7 +1010,7 @@ func (r *raft) Step(m pb.Message) error {
 				return nil
 			}
 
-			r.logger.Infof("%x is starting a new election at term %d", r.id, r.Term)
+			r.logger.Infof("%x is starting a new election at term %d: prs: %v", r.id, r.Term, r.prs)
 			if r.preVote {
 				r.campaign(campaignPreElection)
 			} else {

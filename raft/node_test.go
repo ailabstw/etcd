@@ -212,11 +212,19 @@ func TestNodeReadIndex(t *testing.T) {
 // the leader when DisableProposalForwarding is true.
 func TestDisableProposalForwarding(t *testing.T) {
 	r1 := newTestRaft(1, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
+
+	fmt.Printf("TestDisableProposalForwarding: after newTestRaft: r1.prs: %v\n", r1.prs)
+
 	r2 := newTestRaft(2, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
 	cfg3 := newTestConfig(3, []uint64{1, 2, 3}, 10, 1, NewMemoryStorage())
 	cfg3.DisableProposalForwarding = true
 	r3 := newRaft(cfg3)
+
+	fmt.Printf("TestDisableProposalForwarding: to newNetwork: r1.prs: %v\n", r1.prs)
+
 	nt := newNetwork(r1, r2, r3)
+
+	fmt.Printf("TestDisableProposalForwarding: after newNetwork: r1.prs: %v\n", r1.prs)
 
 	// elect r1 as leader
 	nt.send(raftpb.Message{From: 1, To: 1, Type: raftpb.MsgHup})
@@ -694,7 +702,7 @@ func TestNodeRestart(t *testing.T) {
 func TestNodeRestartFromSnapshot(t *testing.T) {
 	snap := raftpb.Snapshot{
 		Metadata: raftpb.SnapshotMetadata{
-			ConfState: raftpb.ConfState{Nodes: []uint64{1, 2}},
+			ConfState: raftpb.ConfState{Nodes: []uint64{1, 2}, Weights: []uint32{1, 1}},
 			Index:     2,
 			Term:      1,
 		},

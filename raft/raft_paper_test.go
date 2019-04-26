@@ -490,17 +490,25 @@ func TestLeaderAcknowledgeCommit(t *testing.T) {
 	for i, tt := range tests {
 		s := NewMemoryStorage()
 		r := newTestRaft(1, idsBySize(tt.size), 10, 1, s)
+		fmt.Printf("TestLeaderAcknowledgeCommit: (%d/%d) after newTestRaft: prs: %v\n", i, len(tests), r.prs)
 		r.becomeCandidate()
 		r.becomeLeader()
+		fmt.Printf("TestLeaderAcknowledgeCommit: (%d/%d) to commit nop entry: prs: %v committed: %v li: %v\n", i, len(tests), r.prs, r.raftLog.committed, r.raftLog.lastIndex())
 		commitNoopEntry(r, s)
 		li := r.raftLog.lastIndex()
+		fmt.Printf("TestLeaderAcknowledgeCommit: (%d/%d) after commit nop entry: prs: %v committed: %v li: %v\n", i, len(tests), r.prs, r.raftLog.committed, li)
 		r.Step(pb.Message{From: 1, To: 1, Type: pb.MsgProp, Entries: []pb.Entry{{Data: []byte("some data")}}})
+		fmt.Printf("TestLeaderAcknowledgeCommit: (%d/%d) after step: prs: %v committed: %v li: %v\n", i, len(tests), r.prs, r.raftLog.committed, li)
 
-		for _, m := range r.readMessages() {
+		msgs := r.readMessages()
+		for u, m := range msgs {
+			fmt.Printf("TestLeaderAcknowledgeCommit: (%d/%d) readMsg: (%d/%d): m: %v commited: %d li: %v\n", i, len(tests), u, len(msgs), m, r.raftLog.committed, li)
 			if tt.acceptors[m.To] {
 				r.Step(acceptAndReply(m))
 			}
 		}
+
+		fmt.Printf("TestLeaderAcknowledgeCommit: (%d/%d) to cmp: commited: %d li: %v\n", i, len(tests), r.raftLog.committed, li)
 
 		if g := r.raftLog.committed > li; g != tt.wack {
 			t.Errorf("#%d: ack commit = %v, want %v", i, g, tt.wack)

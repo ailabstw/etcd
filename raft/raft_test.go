@@ -4320,16 +4320,28 @@ func newNetworkWithConfig(configFunc func(*Config), peers ...stateMachine) *netw
 				learners[i] = true
 			}
 			v.id = id
+			origPrs := v.prs
 			v.prs = make(map[uint64]*Progress)
 			v.learnerPrs = make(map[uint64]*Progress)
+			fmt.Printf("newNetworkWithConfig: (%d/%d): to for-loop: id: %d origPrs: %v\n", j, len(peers), id, origPrs)
 			for i := 0; i < size; i++ {
 				if _, ok := learners[peerAddrs[i]]; ok {
 					v.learnerPrs[peerAddrs[i]] = &Progress{IsLearner: true}
 				} else {
-					v.prs[peerAddrs[i]] = &Progress{}
+					fmt.Printf("newNetworkWithConfig: (%d/%d): (in-for-loop): %d: peerAddr: %d\n", j, len(peers), i, peerAddrs[i])
+					origPr, ok := origPrs[peerAddrs[i]]
+					var weight uint32
+					if ok {
+						weight = origPr.Weight
+					} else {
+						weight = 1
+					}
+					v.prs[peerAddrs[i]] = &Progress{Weight: weight}
 				}
 			}
+			fmt.Printf("newNetworkWithConfig: (%d/%d): to reset: id: %d v.prs: %v\n", j, len(peers), id, v.prs)
 			v.reset(v.Term)
+			fmt.Printf("newNetworkWithConfig: (%d/%d): after reset: id: %d v.prs: %v\n", j, len(peers), id, v.prs)
 			npeers[id] = v
 		case *blackHole:
 			npeers[id] = v
