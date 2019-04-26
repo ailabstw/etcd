@@ -188,7 +188,8 @@ func (pr *Progress) needSnapshotAbort() bool {
 }
 
 func (pr *Progress) String() string {
-	return fmt.Sprintf("next = %d, match = %d, state = %s, waiting = %v, pendingSnapshot = %d, weight = %d", pr.Next, pr.Match, pr.State, pr.IsPaused(), pr.PendingSnapshot, pr.Weight)
+	return fmt.Sprintf("next = %d, match = %d, state = %s, waiting = %v, pendingSnapshot = %d, recentActive = %v, isLearner = %v, weight: %d",
+		pr.Next, pr.Match, pr.State, pr.IsPaused(), pr.PendingSnapshot, pr.RecentActive, pr.IsLearner, pr.Weight)
 }
 
 type inflights struct {
