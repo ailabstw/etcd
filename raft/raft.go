@@ -1099,7 +1099,8 @@ func stepLeader(r *raft, m pb.Message) error {
 			return ErrProposalDropped
 		}
 
-		for i, e := range m.Entries {
+		for i := range m.Entries {
+			e := &m.Entries[i]
 			if e.Type == pb.EntryConfChange {
 				var cc pb.ConfChange
 				cc.Unmarshal(e.Data)
@@ -1107,7 +1108,7 @@ func stepLeader(r *raft, m pb.Message) error {
 
 				if r.pendingConfIndex > r.raftLog.applied {
 					r.logger.Infof("propose conf %s ignored since pending unapplied configuration [index %d, applied %d]",
-						e.String(), r.pendingConfIndex, r.raftLog.applied)
+						e, r.pendingConfIndex, r.raftLog.applied)
 					m.Entries[i] = pb.Entry{Type: pb.EntryNormal}
 				} else if cc.Weight > 1 && !ok {
 					r.logger.Infof("propose conf %s ignored since weight > 1 and node-id not in prs: weight: %d node-id: %d",
