@@ -186,6 +186,8 @@ type Node interface {
 	// failure in snapshot sending is caught and reported back to the leader; so it can resume raft
 	// log probing in the follower.
 	ReportSnapshot(id uint64, status SnapshotStatus)
+
+	ForceProposeConfChange(ctx context.Context, cc pb.ConfChange) error
 	// Stop performs any necessary termination of the Node.
 	Stop()
 }
